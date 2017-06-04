@@ -1,8 +1,4 @@
----
-title: "ADS 2017: Handling Bias Caused by Missing Delirium Assessments"
-output: github_document
-theme: yeti
----
+# ADS 2017: Handling Bias Caused by Missing Delirium Assessments
 
 This repo houses slides, analyses and visuals for my presentation at the [2017 American Delirium Society conference](http://www.cvent.com/events/7th-annual-american-delirium-society/event-summary-cd74fed5605a4918bc0a9c0e28561bac.aspx).
 
