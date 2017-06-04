@@ -1,0 +1,603 @@
+---
+title: "ADS 2017 Presentation Analyses"
+output:
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    toc_depth: 4
+    code_folding: hide
+    theme: yeti
+---
+
+```{r setup}
+library(tidyverse)
+library(rms)
+
+## Color scheme to match Keynote presentation
+gray.colour <- "#CDCDCD"
+back.colour <- "#222222"
+kn.colours <- c("blue" = "#38A8DA", "yellow" = "#FECB55", "green" = "#89BF60")
+
+```
+
+Notes:
+
+- All graphics are optimized for a presentation, not this Markdown document. If they look weird in this document, that's why.
+- All random samples are done without setting seeds and will look different every time the program is run. So if figures look different in this document than presentation, that's why.
+- Work on one of these projects is ongoing; therefore, only code (not results) is publicly provided.
+
+# TBI Cohort Descriptives
+
+```{r tbi_prep}
+load('Data/tbi_datasets.Rdata')
+
+## Cohort in TBI vs mortality is restricted to patients with blunt injury, >=1 day in the ICU, and
+## at least one day of EMR data
+tbi.icupts <- subset(tbi.oneobs, pt.injury == 'Blunt' & icu.los >= 1 & mrn %in% tbi.daily$mrn)$mrn
+
+tbi.oneobs <- subset(tbi.oneobs, mrn %in% tbi.icupts)
+tbi.daily <- subset(tbi.daily, mrn %in% tbi.icupts)
+
+## How many *days* were missing mental status assessments?
+tbi.daily$had.asmt <- !is.na(tbi.daily$mental.status)
+
+n.days.miss <- sum(tbi.daily$had.asmt)
+pct.days.miss <- round(mean(tbi.daily$had.asmt)*100)
+
+## How many *patients* were completely, partially, or not missing data?
+tbi.oneobs <- tbi.oneobs %>%
+  mutate(partial.asmt = days.mental > 0 & days.mental < n.recs,
+         no.asmt = days.mental == 0,
+         comp.asmt = days.mental == n.recs,
+         had.asmt = partial.asmt | comp.asmt,
+         asmt.data = factor(ifelse(no.asmt, 1,
+                            ifelse(comp.asmt, 3, 2)),
+                            levels = 1:3,
+                            labels = c('All Missing',
+                                       'Some Missing',
+                                       'Complete Data')))
+
+n.comp.miss <- sum(tbi.oneobs$no.asmt)
+pct.comp.miss <- mean(tbi.oneobs$no.asmt)
+
+n.partial.miss <- sum(tbi.oneobs$partial.asmt)
+pct.partial.miss <- mean(tbi.oneobs$partial.asmt)
+
+n.none.miss <- sum(tbi.oneobs$comp.asmt)
+pct.none.miss <- mean(tbi.oneobs$comp.asmt)
+
+n.atleast1.miss <- n.partial.miss + n.comp.miss
+pct.atleast1.miss <- n.atleast1.miss / length(tbi.icupts)
+
+## Create table to describe patient-level missingness
+pt.missing <- tribble(
+  ~ group, ~ pct, ~ n,
+  "Total N", NA, length(tbi.icupts),
+  "Complete assessment data", pct.none.miss, n.none.miss,
+  "Missing at least one assessment", pct.atleast1.miss, n.atleast1.miss,
+  "Partial assessment data", pct.partial.miss, n.partial.miss,
+  "No assessment data", pct.comp.miss, n.comp.miss
+) %>%
+  mutate(pct = round(pct, 2))
+
+pt.missing
+
+```
+
+We have `r length(tbi.icupts)` who were in the ICU with electronic medical record data available for at least one day; these patients had `r nrow(tbi.daily)` total patient-days. Of these patient-days, `r n.days.miss` (`r pct.days.miss`%) were missing mental status assessment.
+
+## How Were Patients with Mental Status Assessments Different from Patients Without?
+```{r tbi_describe_pts}
+html(summaryM(age + gender + race + insurance.code + iss + cpr.yn + pt.marshall + pt.cerebral +
+                pt.epidural + vent.days + disposition.coded + fim.total + icu.los + los + hosp.death +
+                base.motor + base.pupil.react + n.recs ~ asmt.data,
+              data = tbi.oneobs),
+     digits = 2)
+
+```
+
+We see differences in age (patients without assessments are older); insurance (more likely to have public insurance); injury severity (have lower ISS); Marshall Class (more likely to be Marshall Class II vs I or III); cerebral SAH (less likely to have this); time on the vent (much less likely to be ventilated); discharge disposition (more likely to be discharged home, less likely to die in hospital/go to rehab); ICU and hospital LOS (shorter); max motor response (higher); pupil reactivity (less likely to have both fixed). Let's plot some of these to show our friends at ADS.
+
+```{r tbi_pt_plots}
+## -- Function to create consistent boxplots -------------------------------------------------------
+tbi.boxplots <- function(yvar, ylims = NULL, df){
+  p <- ggplot(data = df, aes_string(x = 'had.asmt', y = yvar)) +
+    geom_point(aes(colour = had.asmt), alpha = 0.4, position = position_jitter()) +
+    geom_boxplot(aes(fill = had.asmt), alpha = 0.5, colour = gray.colour, outlier.shape = NA) +
+    scale_fill_manual(values = as.character(kn.colours[c('green', 'blue')]), guide = FALSE) +
+    scale_colour_manual(values = as.character(kn.colours[c('green', 'blue')]), guide = FALSE) +
+    scale_x_discrete(labels = c('No assessment', '>=1'), name = NULL) +
+    scale_y_continuous(name = NULL) +
+    theme_minimal() +
+    theme(plot.background = element_rect(fill = 'transparent', colour = NA),
+          axis.text = element_text(colour = gray.colour, size = 10),
+          panel.grid.major = element_line(colour = gray.colour),
+          panel.grid.minor = element_line(colour = gray.colour))
+
+  if(!is.null(ylims)){
+    p <- p +
+      scale_y_continuous(name = NULL, limits = ylims)
+  } else{
+    p <- p +
+      scale_y_continuous(name = NULL)
+  }
+
+  p
+}
+
+tbi.age.box <- tbi.boxplots('age', df = tbi.oneobs)
+tbi.iss.box <- tbi.boxplots('iss', df = tbi.oneobs)
+tbi.vent.box <- tbi.boxplots('vent.days', ylims = c(0, 40), df = tbi.oneobs)
+tbi.los.box <- tbi.boxplots('los', ylims = c(0, 100), df = tbi.oneobs)
+
+## -- Function to save each boxplot as a PDF to insert in Keynote ----------------------------------
+save.tbi.boxplots <- function(p, fname){
+  ggsave(filename = paste0(fname, '.pdf'),
+         plot = p, device = 'pdf', path = 'ADSFigures', width = 3, height = 3)
+}
+
+save.tbi.boxplots(tbi.age.box, 'tbi_age_box')
+save.tbi.boxplots(tbi.iss.box, 'tbi_iss_box')
+save.tbi.boxplots(tbi.vent.box, 'tbi_vent_box')
+save.tbi.boxplots(tbi.los.box, 'tbi_los_box')
+
+```
+
+## How Were Patient-Days with Missing Status Different from Those Without?
+
+`FALSE` = no mental status available; `TRUE` = patient had at least one mental status assessment that day.
+
+```{r tbi_describe_days}
+html(summaryM(max.motor.imp + pupil.react.imp + min.hemoglobin.imp + max.icp.imp + max.icp.dich +
+                sofa.nanormal.imp + sofa.namissing.imp + tot.benzo + tot.opioid + tot.propofol +
+                tot.dex + tot.antipsyc + tot.betablock + tot.clonid + units.cryo + units.plasma +
+                units.platelets + units.prbc ~ !is.na(mental.status),
+              data = tbi.daily),
+     digits = 2)
+
+```
+
+We see differences in maximum motor response, SOFA, and benzodiazepine and opioid doses.
+
+```{r tbi_daily_box}
+## -- Boxplots for daily data ----------------------------------------------------------------------
+tbi.motor.box <- tbi.boxplots('max.motor.imp', df = tbi.daily)
+tbi.sofa.box <- tbi.boxplots('sofa.nanormal.imp', df = tbi.daily)
+tbi.benzo.box <- tbi.boxplots('tot.benzo', df = tbi.daily)
+tbi.opioid.box <- tbi.boxplots('tot.opioid', df = tbi.daily)
+
+save.tbi.boxplots(tbi.motor.box, 'tbi_motor_box')
+save.tbi.boxplots(tbi.sofa.box, 'tbi_sofa_box')
+save.tbi.boxplots(tbi.benzo.box, 'tbi_benzo_box')
+save.tbi.boxplots(tbi.opioid.box, 'tbi_opioid_box')
+
+```
+
+## Differences in Delirium Duration Depending on Different Assumptions
+One of our main exposures for long-term outcomes is duration of delirium in the index hospitalization. What does that outcome look like if we...
+
+```{r deldur}
+## -- Demonstrate how delirium durations change based on how we treat missing days -----------------
+tbi.delassume <- tbi.daily %>%
+  group_by(mrn) %>%
+  summarise(days.available = sum(!is.na(mental.status)),
+            ## Ignore missing; count up all available delirious assessments
+            days.del.ignore = ifelse(days.available == 0, NA,
+                                     sum(mental.status == 'Delirious', na.rm = TRUE)),
+            ## Missing = normal
+            days.del.normal = sum(mental.status == 'Delirious', na.rm = TRUE),
+            ## Missing = delirious
+            days.del.del = sum(is.na(mental.status) | mental.status == 'Delirious')) %>%
+  mutate(diff.per.pt = days.del.del - days.del.normal)
+
+## Get descriptive stats for each assumption
+tbi.assumed.ignore <- sprintf("%s (%s, %s); N = %s",
+                              median(tbi.delassume$days.del.ignore, na.rm = TRUE),
+                              quantile(tbi.delassume$days.del.ignore, probs = 0.25, na.rm = TRUE),
+                              quantile(tbi.delassume$days.del.ignore, probs = 0.75, na.rm = TRUE),
+                              sum(!is.na(tbi.delassume$days.del.ignore)))
+
+tbi.assumed.normal <- sprintf("%s (%s, %s); N = %s",
+                              median(tbi.delassume$days.del.normal, na.rm = TRUE),
+                              quantile(tbi.delassume$days.del.normal, probs = 0.25, na.rm = TRUE),
+                              quantile(tbi.delassume$days.del.normal, probs = 0.75, na.rm = TRUE),
+                              sum(!is.na(tbi.delassume$days.del.normal)))
+
+tbi.assumed.del <- sprintf("%s (%s, %s); N = %s",
+                           median(tbi.delassume$days.del.del, na.rm = TRUE),
+                           quantile(tbi.delassume$days.del.del, probs = 0.25, na.rm = TRUE),
+                           quantile(tbi.delassume$days.del.del, probs = 0.75, na.rm = TRUE),
+                           sum(!is.na(tbi.delassume$days.del.del)))
+
+## Difference between delirious & normal assumptions
+tbi.assumed.diff <- sprintf("%s (%s, %s)",
+                            median(tbi.delassume$diff.per.pt, na.rm = TRUE),
+                            quantile(tbi.delassume$diff.per.pt, probs = 0.25, na.rm = TRUE),
+                            quantile(tbi.delassume$diff.per.pt, probs = 0.75, na.rm = TRUE))
+
+```
+
+- Ignore missingness; just sum up days of delirium per patient: `r tbi.assumed.ignore`
+- Assume missing = normal: `r tbi.assumed.normal`
+- Assume missing = delirium: `r tbi.assumed.del`
+- Difference per patient of `r tbi.assumed.diff` days
+
+```{r deldur_plot}
+tbi.delassume.plot <- tbi.delassume %>%
+  gather(key = assumption, value = days, days.del.ignore:days.del.del) %>%
+  mutate(assumption.f = factor(ifelse(assumption == 'days.del.ignore', 1,
+                               ifelse(assumption == 'days.del.normal', 2,
+                               ifelse(assumption == 'days.del.del', 3, NA))),
+                               levels = 1:3,
+                               labels = c(paste0('Missing days ignored\n', tbi.assumed.ignore),
+                                          paste0('Missing = Normal\n', tbi.assumed.normal),
+                                          paste0('Missing = Delirious\n', tbi.assumed.del))),
+         dummy = 1)
+         
+## -- Create boxplots for distributions of delirium durations with different assumptions -----------
+ggplot(data = subset(tbi.delassume.plot, assumption != 'days.del.normal'),
+         ## decided not to include missing = normal in plot; not that different from ignoring
+       aes(x = dummy, y = days)) +
+  facet_wrap(~ assumption.f, nrow = 3) +
+  geom_point(aes(colour = assumption.f), alpha = 0.4, position = position_jitter()) +
+  geom_boxplot(aes(fill = assumption.f),
+               alpha = 0.5, colour = gray.colour, size = 1, outlier.shape = NA) +
+  scale_y_continuous(limits = c(0, 30)) +
+  scale_colour_manual(values = as.character(kn.colours[c(3, 1)])) +
+  scale_fill_manual(values = as.character(kn.colours[c(3, 1)])) +
+  coord_flip() +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = 'transparent', colour = NA),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(colour = 'grey50', size = 12, face = 'bold'),
+        axis.title = element_blank(),
+        panel.grid.major = element_line(colour = 'grey50'),
+        panel.grid.minor = element_line(colour = 'grey50'),
+        strip.text = element_text(colour = gray.colour, size = 18, face = 'bold'),
+        legend.position = 'none')
+
+ggsave(filename = 'tbi_delassume.pdf', device = 'pdf', path = 'ADSFigures', width = 5, height = 7)
+
+```
+
+# BRAIN-ICU Modifications
+
+```{r brain_prep}
+load('Data/braindata.Rdata')
+
+## brain.daily includes 30 obs/patient, including records for after discharge/withdrawal/death;
+## create indicator for whether patient was in hospital + still in study on each day
+brain.daily$hospital.day <- brain.daily$status.today.imp %in% c('Normal', 'Delirious', 'Comatose')
+
+n.days.miss <- sum(is.na(subset(brain.daily, hospital.day)$mental.stat))
+pct.days.miss <- mean(is.na(subset(brain.daily, hospital.day)$mental.stat))
+
+n.pts.miss <- sum(brain.oneobs$id %in% subset(brain.daily, hospital.day & is.na(mental.stat))$id)
+pct.pts.miss <- mean(brain.oneobs$id %in% subset(brain.daily, hospital.day & is.na(mental.stat))$id)
+
+## How many patient-days were missing per patient missing *any*?
+brain.missdays <- brain.daily %>%
+  filter(hospital.day & is.na(mental.stat)) %>%
+  group_by(id) %>%
+  summarise(days.miss = n())
+
+brain.missdays.stats <- sprintf("%s (%s, %s)",
+                                median(brain.missdays$days.miss),
+                                quantile(brain.missdays$days.miss, probs = 0.25),
+                                quantile(brain.missdays$days.miss, probs = 0.75))
+
+```
+
+In BRAIN-ICU, we had `r round(pct.days.miss*100, 2)`% of patient-days missing; this missingness was spread among `r n.pts.miss` patients (`r round(pct.pts.miss*100)`% of our total cohort). Among patients missing any data, the median (IQR) days missing was `r brain.missdays.stats`.
+
+We want to see how our results change if we assume different amounts of delirium days were 1) missing completely at random and 2) missing at random.
+
+```{r brain_delmissing}
+has.rbans <- subset(brain.fu, fu.period == '3 Month' & !is.na(rbans.global.score))$id
+
+## Cube root drug doses
+brain.oneobs <- brain.oneobs %>%
+  filter(id %in% has.rbans) %>%
+  mutate(mean.benz.cube = mean.benz.icu^(1/3),
+         mean.op.new.cube = mean.op.new.icu^(1/3),
+         mean.prop.cube = mean.prop.icu^(1/3),
+         mean.dex.cube = mean.dex.icu^(1/3),
+         mean.hal.cube = mean.hal.icu^(1/3))
+
+## Set up variables for 10/25/50% missing delirium days, both MCAR and MAR
+brain.daily$mental.stat.mcar.10 <- brain.daily$mental.stat.mcar.25 <-
+  brain.daily$mental.stat.mcar.50 <- brain.daily$mental.stat.mar.10 <-
+  brain.daily$mental.stat.mar.25 <- brain.daily$mental.stat.mar.50 <- brain.daily$mental.stat.imp
+
+## We only need in-hospital days, not entire study period
+brain.hospital <- brain.daily %>%
+  filter(hospital.day & id %in% has.rbans) %>%
+  mutate(mean.prop.cube = mean.prop.icu^(1/3),
+         mean.benz.cube = mean.benz.icu^(1/3),
+         mean.op.new.cube = mean.op.new.icu^(1/3))
+
+## How many hospital days were there?
+hosp.days <- sum(brain.hospital$hospital.day)
+
+## Easy ones: MCAR
+brain.hospital$mental.stat.mcar.10[sample(1:nrow(brain.hospital), size = round(hosp.days*0.1))] <-
+  NA
+brain.hospital$mental.stat.mcar.25[sample(1:nrow(brain.hospital), size = round(hosp.days*0.25))] <-
+  NA
+brain.hospital$mental.stat.mcar.50[sample(1:nrow(brain.hospital), size = round(hosp.days*0.5))] <-
+  NA
+
+## Harder: MAR - predict daily missingness based on age, SOI, opioids, propofol
+brain.hospital <- brain.hospital %>%
+  left_join(dplyr::select(brain.oneobs, id, age.enroll), by = 'id')
+
+## Ended up just predicting with propofol
+mod.missing.original <- lrm(is.na(mental.stat) ~ rcs(mean.prop.cube, 3),
+                            data = brain.hospital)
+
+## (If we were doing this for a full analysis, we'd need to account for clustering by patient)
+
+## Calculate P(missing) for each patient-day
+brain.hospital$missing.prob <-
+  predict(mod.missing.original, newdata = brain.hospital, type = 'lp') %>% plogis
+
+## Calculate quantiles of missingness probabilities
+brain.mar.qs <- quantile(brain.hospital$missing.prob, probs = c(0.9, 0.75, 0.5))
+
+## For each % missing, set all days with P(missing) > quantile to NA
+brain.hospital$mental.stat.mar.10[brain.hospital$missing.prob > brain.mar.qs['90%']] <- NA
+brain.hospital$mental.stat.mar.25[brain.hospital$missing.prob > brain.mar.qs['75%']] <- NA
+brain.hospital$mental.stat.mar.50[brain.hospital$missing.prob > brain.mar.qs['50%']] <- NA
+
+## Get delirium durations for each value of missingness so we can run models with each
+brain.deldur.missing <- brain.hospital %>%
+  group_by(id) %>%
+  summarise(del.mcar.10 = sum(mental.stat.mcar.10 == 'Delirious', na.rm = TRUE),
+            coma.mcar.10 = sum(mental.stat.mcar.10 == 'Comatose', na.rm = TRUE),
+            del.mcar.25 = sum(mental.stat.mcar.25 == 'Delirious', na.rm = TRUE),
+            coma.mcar.25 = sum(mental.stat.mcar.25 == 'Comatose', na.rm = TRUE),
+            del.mcar.50 = sum(mental.stat.mcar.50 == 'Delirious', na.rm = TRUE),
+            coma.mcar.50 = sum(mental.stat.mcar.50 == 'Comatose', na.rm = TRUE),
+            del.mar.10 = sum(mental.stat.mar.10 == 'Delirious', na.rm = TRUE),
+            coma.mar.10 = sum(mental.stat.mar.10 == 'Comatose', na.rm = TRUE),
+            del.mar.25 = sum(mental.stat.mar.25 == 'Delirious', na.rm = TRUE),
+            coma.mar.25 = sum(mental.stat.mar.25 == 'Comatose', na.rm = TRUE),
+            del.mar.50 = sum(mental.stat.mar.50 == 'Delirious', na.rm = TRUE),
+            coma.mar.50 = sum(mental.stat.mar.50 == 'Comatose', na.rm = TRUE)) %>%
+  ## Join baseline variables so we can mimic original BRAIN model
+  right_join(dplyr::select(brain.oneobs, id, age.enroll, charlson.score, edu, iqcode.score.e,
+                           stroke.risk, e4.type, mean.modsofa.icu.old, icudays.sevseptic.s,
+                           ints.sat.l90.s, mean.benz.cube, mean.op.new.cube, mean.prop.cube,
+                           mean.hal.cube, mean.dex.cube, del.s.imp, coma.s.imp),
+             by = 'id') %>%
+  left_join(dplyr::select(filter(brain.fu, fu.period == '3 Month'), id, rbans.global.score))
+
+## Function to run a model given a type (MCAR, MAR) and % missing (10, 25, 50)
+run.miss.mod <- function(mtype = c('mcar', 'mar'),
+                         mpct = c('0', '10', '25', '50')){
+  
+  mtype <- match.arg(mtype)
+  mpct <- match.arg(mpct)
+  
+  if(mpct == '0'){
+    delvar <- 'del.s.imp'
+    comavar <- 'coma.s.imp'
+  } else{
+    delvar <- paste('del', mtype, mpct, sep = '.')
+    comavar <- paste('coma', mtype, mpct, sep = '.')
+  }
+  
+  modform <- as.formula(sprintf("rbans.global.score ~ rcs(age.enroll, 4) + rcs(charlson.score, 4) + rcs(edu, 4) + rcs(iqcode.score.e, 4) + rcs(stroke.risk, 4) + e4.type + rcs(mean.modsofa.icu.old, 4) + rcs(icudays.sevseptic.s, 4) + rcs(ints.sat.l90.s, 4) + rcs(%s, 4)*rcs(%s, 4) + rcs(mean.benz.cube, 4) + rcs(mean.op.new.cube, 4) + rcs(mean.prop.cube, 4) + mean.dex.cube + mean.hal.cube",
+                        delvar, comavar))
+  
+  list(ols(modform, data = brain.deldur.missing), delvar)
+}
+
+## List of original + MCAR + MAR models
+brain.missing.mods <- map2(list('mcar', 'mcar', 'mcar', 'mcar', 'mar', 'mar', 'mar'),
+                           list('0', '10', '25', '50', '10', '25', '50'),
+                           .f = run.miss.mod)
+
+## -- Function to take one element of brain.missing.mods and calculate predicted RBANS for each ----
+## -- delirium duration ----------------------------------------------------------------------------
+
+## Gotta set that datadist to use rms::Predict()
+dd <- datadist(brain.deldur.missing); options(datadist = 'dd')
+
+calc.predvals <- function(listobj){
+  mod <- listobj[[1]]
+  delvar <- listobj[[2]]
+  
+  ## Call Predict() using a given model and delirium duration variable
+  predvals <- eval(parse(text = sprintf("Predict(mod, %s = NA)", delvar))) %>%
+    as.data.frame() %>%
+    ## Create variables for types/amounts of missing data
+    mutate(delvar = ifelse(delvar == 'del.s.imp', 'original', gsub('^del\\.', '', delvar))) %>%
+    separate(delvar, into = c('mtype', 'mpct'), remove = FALSE) %>%
+    ## Format missingness variables for facet labels
+    mutate(mtype = ifelse(mtype == 'mcar', 'Missing Completely\nat Random (MCAR)',
+                   ifelse(mtype == 'mar', 'Missingness Related to\nCovariates (MAR)', NA)),
+           mpct = ifelse(is.na(mtype), NA, paste0(mpct, "% Missing")))
+  
+  ## Rename delirium exposures to "delirium" in each dataset to make plotting function easier
+  names(predvals) <- gsub(delvar, 'delirium', names(predvals))
+  
+  predvals
+}
+
+## -- Use above function to get a big data frame with all our predicted values ---------------------
+brain.missing.predvals <- map_df(brain.missing.mods, .f = calc.predvals)
+
+
+## -- Figure for original + modified model results -------------------------------------------------
+## Set values for X axis limits
+del.limits <- c(0, 25)
+
+## Data management to add original data to each facet: need faceting values (type/amount)
+brain.mod.org.faceted <-  map2(list('Missing Completely\nat Random (MCAR)',
+                                    'Missing Completely\nat Random (MCAR)',
+                                    'Missing Completely\nat Random (MCAR)',
+                                    'Missingness Related to\nCovariates (MAR)',
+                                    'Missingness Related to\nCovariates (MAR)',
+                                    'Missingness Related to\nCovariates (MAR)'),
+                               list('10% Missing', '25% Missing', '50% Missing',
+                                    '10% Missing', '25% Missing', '50% Missing'),
+                               .f = ~ subset(brain.missing.predvals, delvar == 'original') %>%
+                                 mutate(mtype = .x, mpct = .y)) %>%
+  bind_rows()
+
+## Create main figure
+brain.mod.fig <- ggplot(data = subset(brain.missing.predvals, delvar != 'original'),
+                        aes(x = delirium, y = yhat)) +
+  facet_grid(mtype ~ mpct) +
+  ## Modified results (CI + point estimate)
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = mtype), alpha = 0.5) +
+  geom_line(aes(colour = mtype), size = 2) +
+  ## Original results (CI + point estimate)
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.3, fill = gray.colour,
+              data = brain.mod.org.faceted) +
+  geom_line(data = brain.mod.org.faceted, alpha = 0.4, colour = 'gray30', size = 2) +
+  scale_colour_manual(values = as.character(kn.colours[c(1, 3)])) +
+  scale_fill_manual(values = as.character(kn.colours[c(1, 3)])) +
+  scale_x_continuous(name = 'Days of Delirium', limits = del.limits) +
+  scale_y_continuous(name = 'Adjusted RBANS Global Score', limits = c(35, 100)) +
+  labs(caption = '\nGrayscale = original study results; color = modified as noted') +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = 'transparent', colour = NA),
+        axis.text = element_text(colour = gray.colour, size = 14),
+        axis.title = element_text(colour = gray.colour, size = 14),
+        plot.title = element_text(colour = gray.colour, size = 20),
+        plot.caption = element_text(colour = gray.colour, face = 'italic', size = 16),
+        strip.text = element_text(colour = gray.colour, size = 16),
+        panel.spacing = unit(0.5, 'inches'),
+        panel.grid.major = element_line(colour = 'gray30'),
+        panel.grid.minor = element_line(colour = 'gray30'),
+        panel.border = element_rect(fill = NA, colour = 'gray30'),
+        legend.position = 'none')
+
+brain.mod.fig
+
+ggsave(filename = 'brain_modifiedmods.pdf',
+       device = 'pdf', width = 10, height = 7, path = 'ADSFigures')
+
+```
+
+# Visuals for Types of Missingness
+
+Create dotplot of 1000 observations with a random X value (eg, age), and sorted/colored by three groups (unmeasured confounder).
+
+- MCAR: make missing completely at random
+- MAR: make missingness at higher rate with higher X
+- MNAR: make missing depending on unmeasured confounder
+
+```{r random_types}
+## Base data set: variables for X, Y, category (eg, study site)
+random_nums <- data.frame(x = flatten_int(map(1:30, ~rep(., times = 30))),
+                          y = rep(1:30, 30),
+                          category = c(rep('A', 300), rep('B', 300), rep('C', 300)),
+                          stringsAsFactors = FALSE)
+
+## Set value for point size (optimized for Keynote, not RMarkdown!)
+ptsize <- 7
+
+## Setup plot: all X/Y values by category
+base_plot <- ggplot(data = random_nums, aes(x = x, y = y)) +
+  geom_point(aes(colour = category), size = ptsize) +
+  scale_colour_manual(values = as.character(kn.colours)) +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = 'transparent', colour = NA),
+        legend.position = 'none',
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.grid = element_blank())
+
+## MCAR: Set 1/3 values to NA at random
+mcar_nums <- random_nums
+mcar_nums$category[sample(1:nrow(mcar_nums), size = 300)] <- 'Missing'
+
+mcar_plot <- ggplot(data = mcar_nums, aes(x = x, y = y)) +
+  geom_point(aes(colour = category), size = ptsize) +
+  scale_colour_manual(values = c(as.character(kn.colours), back.colour)) +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = 'transparent', colour = NA),
+        legend.position = 'none',
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.grid = element_blank())
+
+mcar_plot
+
+## MAR: missingness varies by category
+mar_is_missing <- c(as.logical(rbinom(n = 300, size = 1, prob = 0.75)),
+                    as.logical(rbinom(n = 300, size = 1, prob = 0.4)),
+                    as.logical(rbinom(n = 300, size = 1, prob = 0.1)))
+
+mar_nums <- cbind(random_nums, mar_is_missing) %>%
+  mutate(category = ifelse(mar_is_missing, 'Missing', category))
+
+mar_plot <- ggplot(data = mar_nums, aes(x = x, y = y)) +
+  geom_point(aes(colour = category), size = ptsize) +
+  scale_colour_manual(values = c(as.character(kn.colours), back.colour)) +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = 'transparent', colour = NA),
+        legend.position = 'none',
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.grid = element_blank())
+
+mar_plot
+
+## MNAR: missingness varies with unmeasured confounder (x axis)
+create_mnar_indicator <- function(mdenom){
+  tmp <- rep(FALSE, 30)
+  tmp[sample(1:30, size = ((1 / mdenom)*30))] <- TRUE
+  tmp
+}
+
+mnar_is_missing <- map(rep(1:10, 3), create_mnar_indicator) %>%
+  flatten_lgl()
+
+mnar_nums <- cbind(random_nums, mnar_is_missing) %>%
+  mutate(category = ifelse(mnar_is_missing, 'Missing', category))
+
+## Add shuffled X value to demonstrate what MNAR data would look like to our eyeballs
+rand_order <- sample(1:900, size = 900, replace = FALSE)
+mnar_nums$xrand <- mnar_nums$x[rand_order]
+mnar_nums$yrand <- mnar_nums$y[rand_order]
+
+## Plot if we knew X
+mnar_plot <- ggplot(data = mnar_nums, aes(x = x, y = y)) +
+  geom_point(aes(colour = category), size = ptsize) +
+  scale_colour_manual(values = c(as.character(kn.colours), back.colour)) +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = 'transparent', colour = NA),
+        panel.background = element_rect(fill = 'transparent', colour = gray.colour),
+        legend.position = 'none',
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.grid = element_blank())
+
+mnar_plot
+
+## Plot if we don't know X
+mnar_plot_xunknown <-  ggplot(data = mnar_nums, aes(x = xrand, y = yrand)) +
+  geom_point(aes(colour = category), size = ptsize) +
+  scale_colour_manual(values = c(as.character(kn.colours), back.colour)) +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = 'transparent', colour = NA),
+        panel.background = element_rect(fill = 'transparent', colour = gray.colour),
+        legend.position = 'none',
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.grid = element_blank())
+
+mnar_plot_xunknown
+
+ggsave(filename = 'base.pdf', base_plot, path = 'ADSFigures', device = 'pdf', width = 10, height = 8)
+ggsave(filename = 'mcar.pdf', mcar_plot, path = 'ADSFigures', device = 'pdf', width = 10, height = 8)
+ggsave(filename = 'mar.pdf', mar_plot, path = 'ADSFigures', device = 'pdf', width = 10, height = 8)
+ggsave(filename = 'mnar.pdf', mnar_plot, path = 'ADSFigures', device = 'pdf', width = 10, height = 8)
+ggsave(filename = 'mnar_xunknown.pdf', mnar_plot_xunknown,
+       path = 'ADSFigures', device = 'pdf', width = 10, height = 8)
+
+```
