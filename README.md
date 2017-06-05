@@ -9,7 +9,7 @@ This repo houses slides, analyses and visuals for my presentation at the [2017 A
 
 Key documents:
 
-- Slides (coming soon)
+- [Slides](ADS2017BiasFromMissing_slides.pdf)
 - [R code](ads_presentation.Rmd) used to generate descriptives, simulate missingness of various types, and create visuals for presentation
 
 Licensed under [MIT](https://choosealicense.com/licenses/mit/). Please cite appropriately.
